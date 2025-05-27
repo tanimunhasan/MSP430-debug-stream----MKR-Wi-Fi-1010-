@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>Live MQTT Log Viewer</title>
+  <style>
+    body {
+      font-family: monospace;
+      background: #111;
+      color: #0f0;
+      margin: 0;
+      padding: 20px;
+    }
+    h1 {
+      color: #0ff;
+    }
+    #logBox {
+      border: 1px solid #0f0;
+      padding: 10px;
+      height: 400px;
+      overflow-y: scroll;
+      background-color: #000;
+      white-space: pre-wrap;
+    }
+    #controls {
+      margin-top: 10px;
+    }
+    input, button, select {
+      font-family: monospace;
+      margin-right: 5px;
+      padding: 4px;
+    }
+    #inputField {
+      width: 200px;
+    }
+  </style>
+</head>
+<body>
+  <h1>MQTT Log Dashboard (HiveMQ)</h1>
+  <div id="controls">
+    Filter: <input type="text" id="filterInput" placeholder="type to filter" />
+    Time Range: 
+    <select id="timeRange">
+      <option value="0">Show All</option>
+      <option value="1">Last 1 min</option>
+      <option value="5">Last 5 min</option>
+      <option value="10">Last 10 min</option>
+    </select>
+    <button onclick="clearLogs()">Clear</button>
+    <button onclick="downloadCSV()">Export CSV</button>
+    <button onclick="pauseLogs()" id="pauseBtn">Pause</button>
+    <button onclick="resumeLogs()" id="resumeBtn" disabled>Resume</button>
+    <span id="status" style="float:right; color: #0ff;">Status: Connecting...</span>
+  </div>
+
+  <div style="margin-top:10px;">
+    Send to Device: <input type="text" id="inputField" placeholder="Type command" onkeydown="checkSend(event)" />
+    <button onclick="sendCommand()">Send</button>
+  </div>
+
+  <div id="logBox"></div>
+
+  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+  <script>
+    const logBox = document.getElementById('logBox');
+    const filterInput = document.getElementById('filterInput');
+    const inputField = document.getElementById('inputField');
+    const statusLabel = document.getElementById('status');
+    const timeRangeSelect = document.getElementById('timeRange');
+    const pauseBtn = document.getElementById('pauseBtn');
+    const resumeBtn = document.getElementById('resumeBtn');
+    const topic = 'logs/mkr';
+    const commandTopic = 'logs/mkr/command';
+    const logs = [];
+    let paused = false;
+
+    const client = mqtt.connect('wss://mqtt-dashboard.com:8884/mqtt');
+
+    client.on('connect', function () {
+      logBox.textContent += `\n[✔] Connected to HiveMQ\n[✔] Subscribing to topic: ${topic}\n`;
+      statusLabel.textContent = 'Status: Connected ✅';
+      client.subscribe(topic);
+    });
+
+    client.on('message', function (topic, message) {
+      if (paused) return;
+      const now = Date.now();
+      const time = new Date(now).toLocaleTimeString();
+      const msg = message.toString();
+      logs.push({ time, timestamp: now, message: msg });
+      refreshDisplay();
+    });
+
+    client.on('error', function (err) {
+      statusLabel.textContent = `Status: Error ❌ (${err.message})`;
+    });
+
+    client.on('close', function () {
+      statusLabel.textContent = 'Status: Disconnected 🔄';
+    });
+
+    function clearLogs() {
+      logBox.textContent = '';
+    }
+
+    function downloadCSV() {
+      let csv = 'Time,Message\n';
+      logs.forEach(log => {
+        csv += `"${log.time}","${log.message.replace(/"/g, '""')}"\n`;
+      });
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'mqtt_logs.csv';
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    function refreshDisplay() {
+      if (paused) return;
+      logBox.textContent = '';
+      const filter = filterInput.value.toLowerCase();
+      const minutes = parseInt(timeRangeSelect.value);
+      const cutoff = minutes > 0 ? Date.now() - minutes * 60000 : 0;
+
+      logs.forEach(log => {
+        const entry = `[${log.time}] ${log.message}`;
+        if ((!filter || entry.toLowerCase().includes(filter)) && (cutoff === 0 || log.timestamp >= cutoff)) {
+          logBox.textContent += entry + "\n";
+        }
+      });
+      logBox.scrollTop = logBox.scrollHeight;
+    }
+
+    function pauseLogs() {
+      paused = true;
+      pauseBtn.disabled = true;
+      resumeBtn.disabled = false;
+      statusLabel.textContent = 'Status: Paused ⏸️';
+    }
+
+    function resumeLogs() {
+      paused = false;
+      pauseBtn.disabled = false;
+      resumeBtn.disabled = true;
+      statusLabel.textContent = 'Status: Connected ✅';
+      refreshDisplay();
+    }
+
+    function sendCommand() {
+      const input = inputField.value.trim();
+      if (input) {
+        client.publish(commandTopic, input);
+        logBox.textContent += `\n[SENT] ${input}`;
+        inputField.value = '';
+        refreshDisplay();
+      }
+    }
+
+    function checkSend(e) {
+      if (e.key === 'Enter') sendCommand();
+    }
+
+    filterInput.addEventListener('input', refreshDisplay);
+    timeRangeSelect.addEventListener('change', refreshDisplay);
+  </script>
+</body>
+</html>
